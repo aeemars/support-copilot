@@ -2,6 +2,8 @@
 
 Support Copilot is a polished portfolio MVP for a fictional Lagos electronics retailer, **Kora Electronics**. It combines curated MongoDB support articles, verified demo order records, and Wekoya Bridge AI into a compact customer-support experience.
 
+The backend uses the official PyMongo async client for MongoDB connection, CRUD operations, and index management.
+
 ## Features
 
 - Curated knowledge-base retrieval with MongoDB text search
