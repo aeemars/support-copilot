@@ -91,6 +91,27 @@ async def test_unsupported_question_has_safe_escalation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_configuration_failure_returns_no_internal_details(monkeypatch):
+    db = FakeDB(customer=True)
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+
+    bridge = SimpleNamespace(
+        catalogue_checked=False,
+        check_catalogue=AsyncMock(return_value=(False, "gemini-2.5-flash-lite does not advertise tools")),
+    )
+    retrieval = SimpleNamespace(articles_for_context=AsyncMock())
+    response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
+        ChatRequest(customer_id="cust-ada", message="What is your return policy?")
+    )
+
+    assert "temporarily unavailable" in response.answer.lower()
+    assert "gemini" not in response.answer.lower()
+    assert "configuration" not in response.answer.lower()
+    assert response.citations == []
+    retrieval.articles_for_context.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_citations_are_limited_to_retrieved_articles(monkeypatch):
     citation = chat_service.Citation(slug="returns-policy", title="Returns Policy", excerpt="Return within seven days.")
     db = FakeDB(customer=True)

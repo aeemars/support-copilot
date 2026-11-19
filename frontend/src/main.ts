@@ -208,7 +208,14 @@ form.addEventListener("submit", async (event) => {
     status.textContent = "Answering";
     addMessage("assistant", response.answer, response.citations);
   } catch (error) {
-    addMessage("assistant", error instanceof Error ? error.message : "The request failed. Please try again or escalate to a human agent.");
+    const detail = error instanceof Error ? error.message : "";
+    const internal = /gemini|wekoya|bridge|api key|catalogue|configuration|model/i.test(detail);
+    addMessage(
+      "assistant",
+      internal
+        ? "The support assistant is temporarily unavailable. Please try again later or escalate to a human agent."
+        : detail || "The request failed. Please try again or escalate to a human agent.",
+    );
   } finally {
     sendButton.disabled = false;
     status.textContent = "";

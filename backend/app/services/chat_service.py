@@ -26,19 +26,19 @@ class ChatService:
         session_id = request.session_id
         session_id = session_id or str(uuid.uuid4())
 
+        if not self.bridge.catalogue_checked:
+            supported, _warning = await self.bridge.check_catalogue()
+            if not supported:
+                answer = "The support assistant is temporarily unavailable. Please try again later or escalate this conversation to a human agent."
+                await persist_messages(db, session_id, request.customer_id, request.message, answer)
+                return ChatResponse(session_id=session_id, answer=answer, citations=[])
+
         citations, article_context = await self.retrieval.articles_for_context(request.message)
         context = article_context or "(No relevant support articles were retrieved.)"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {"role": "user", "content": f"Retrieved support context (use only this context):\n<retrieved_articles>\n{context}\n</retrieved_articles>\n\nCustomer question: {request.message}"},
         ]
-
-        if not self.bridge.catalogue_checked:
-            supported, warning = await self.bridge.check_catalogue()
-            if not supported:
-                answer = f"I cannot safely answer that yet because of a configuration issue: {warning} You can escalate this conversation to a human agent."
-                await persist_messages(db, session_id, request.customer_id, request.message, answer)
-                return ChatResponse(session_id=session_id, answer=answer, citations=citations)
 
         tool_used = None
         usage = {}
