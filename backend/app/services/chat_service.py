@@ -26,12 +26,23 @@ class ChatService:
         session_id = request.session_id
         session_id = session_id or str(uuid.uuid4())
 
+        ensure_end_user = getattr(self.bridge, "ensure_end_user", None)
+        end_user_ready = True
+        if ensure_end_user is not None:
+            end_user_ready, _end_user_warning = await ensure_end_user(request.customer_id)
+        if not end_user_ready:
+            answer = "The support assistant is temporarily unavailable. Please try again later or escalate this conversation to a human agent."
+            await persist_messages(db, session_id, request.customer_id, request.message, answer)
+            return ChatResponse(session_id=session_id, answer=answer, citations=[])
+
         if not self.bridge.catalogue_checked:
             supported, _warning = await self.bridge.check_catalogue()
             if not supported:
-                answer = "The support assistant is temporarily unavailable. Please try again later or escalate this conversation to a human agent."
-                await persist_messages(db, session_id, request.customer_id, request.message, answer)
-                return ChatResponse(session_id=session_id, answer=answer, citations=[])
+                import re
+                if re.search(r"\b(order|tracking|shipment|where is|status)\b", request.message, re.I):
+                    answer = "The assistant cannot verify order status safely until Wekoya tool support is confirmed. Please escalate this request to a human agent."
+                    await persist_messages(db, session_id, request.customer_id, request.message, answer)
+                    return ChatResponse(session_id=session_id, answer=answer, citations=[])
 
         citations, article_context = await self.retrieval.articles_for_context(request.message)
         context = article_context or "(No relevant support articles were retrieved.)"
@@ -45,7 +56,7 @@ class ChatService:
         for request_number in range(5):
             response = await self.bridge.create(
                 messages=messages,
-                tools=[ORDER_TOOL],
+                tools=[ORDER_TOOL] if getattr(self.bridge, "tools_supported", False) else None,
                 customer_id=request.customer_id,
             )
             choice = response.choices[0]

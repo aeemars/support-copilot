@@ -77,6 +77,7 @@ async def test_unsupported_question_has_safe_escalation(monkeypatch):
 
     bridge = SimpleNamespace(
         catalogue_checked=True,
+        tools_supported=False,
         create=AsyncMock(return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="I do not have enough verified information. Please escalate to a human agent.", tool_calls=None))],
             usage=None,
@@ -97,18 +98,23 @@ async def test_configuration_failure_returns_no_internal_details(monkeypatch):
 
     bridge = SimpleNamespace(
         catalogue_checked=False,
+        tools_supported=False,
         check_catalogue=AsyncMock(return_value=(False, "gemini-2.5-flash-lite does not advertise tools")),
+        create=AsyncMock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="I do not have enough verified information. Please escalate to a human agent.", tool_calls=None))],
+            usage=None,
+        )),
     )
-    retrieval = SimpleNamespace(articles_for_context=AsyncMock())
+    retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
     response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
         ChatRequest(customer_id="cust-ada", message="What is your return policy?")
     )
 
-    assert "temporarily unavailable" in response.answer.lower()
+    assert "human agent" in response.answer.lower()
     assert "gemini" not in response.answer.lower()
     assert "configuration" not in response.answer.lower()
     assert response.citations == []
-    retrieval.articles_for_context.assert_not_awaited()
+    retrieval.articles_for_context.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -118,6 +124,7 @@ async def test_citations_are_limited_to_retrieved_articles(monkeypatch):
     monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
     bridge = SimpleNamespace(
         catalogue_checked=True,
+        tools_supported=False,
         create=AsyncMock(return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="Answered from retrieved support.", tool_calls=None))],
             usage=None,
@@ -170,6 +177,7 @@ async def test_tool_loop_limit(monkeypatch):
     )
     bridge = SimpleNamespace(
         catalogue_checked=True,
+        tools_supported=True,
         create=AsyncMock(return_value=SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[tool_call]))],
             usage=None,

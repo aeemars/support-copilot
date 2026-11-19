@@ -1,6 +1,7 @@
 import asyncio
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI, APIError, APIStatusError, APITimeoutError
 
 from app.config import settings
@@ -21,9 +22,34 @@ class BridgeClient:
         self.client = AsyncOpenAI(
             base_url="https://wekoya-api.wekoya.tech/v1",
             api_key=settings.wekoya_api_key,
+            timeout=30.0,
         )
         self.tools_supported = False
         self.catalogue_checked = False
+
+    async def ensure_end_user(self, customer_id: str) -> tuple[bool, str]:
+        if not settings.wekoya_api_key:
+            return False, "WEKOYA_API_KEY is not configured."
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                response = await http.post(
+                    "https://wekoya-api.wekoya.tech/v1/end-users",
+                    headers={"Authorization": f"Bearer {settings.wekoya_api_key}"},
+                    json={
+                        "external_id": customer_id,
+                        "allowance": 5000,
+                        "period": "monthly",
+                    },
+                )
+            if response.status_code in (200, 201, 409):
+                return True, ""
+            if response.status_code in (400, 404):
+                return False, "The demo customer could not be provisioned with Wekoya."
+            return False, "Wekoya could not provision the selected demo customer."
+        except httpx.TimeoutException:
+            return False, "Wekoya timed out while provisioning the demo customer."
+        except httpx.HTTPError:
+            return False, "Wekoya could not provision the selected demo customer."
 
     async def check_catalogue(self) -> tuple[bool, str]:
         if not settings.wekoya_api_key:
@@ -58,12 +84,14 @@ class BridgeClient:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                return await self.client.chat.completions.create(
-                    model=settings.wekoya_model,
-                    messages=messages,
-                    tools=tools,
-                    extra_headers={"X-Bridge-End-User": customer_id},
-                )
+                request: dict[str, Any] = {
+                    "model": settings.wekoya_model,
+                    "messages": messages,
+                    "extra_headers": {"X-Bridge-End-User": customer_id},
+                }
+                if tools:
+                    request["tools"] = tools
+                return await self.client.chat.completions.create(**request)
             except APITimeoutError as exc:
                 last_error = exc
                 raise BridgeResponseError("The AI service timed out. Please try again or escalate to a human agent.", 504)
