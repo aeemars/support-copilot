@@ -8,7 +8,7 @@ from app.models import ChatRequest, OrderStatusArgs
 from app.services import chat_service
 from app.services.bridge_client import BridgeResponseError, map_status_error
 from app.services.order_service import get_order_status
-from app.services.chat_service import ChatService
+from app.services.chat_service import ChatService, local_commerce_answer
 from app.services.bridge_client import BridgeResponseError
 
 
@@ -69,6 +69,17 @@ async def test_order_lookup_prevents_cross_customer_access(monkeypatch):
     monkeypatch.setattr("app.services.order_service.get_db", lambda: db)
     result = await get_order_status("cust-tunde", OrderStatusArgs(order_id="KORA-1001"))
     assert result["found"] is False
+
+
+@pytest.mark.asyncio
+async def test_order_questions_use_local_mongodb_records(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.chat_service.user_orders",
+        AsyncMock(return_value=[{"order_id": "KORA-ABC123", "fulfillment_status": "processing"}]),
+    )
+    answer = await local_commerce_answer("user-ada", "Do I have any placed order?")
+    assert "KORA-ABC123" in answer
+    assert "processing" in answer
 
 
 @pytest.mark.asyncio

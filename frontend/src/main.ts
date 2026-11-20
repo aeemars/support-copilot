@@ -1,6 +1,6 @@
 import "./styles.css";
-import { createTicket, searchKnowledge, sendChat } from "./api";
-import type { KnowledgeArticle, Citation } from "./types";
+import { addToCart, checkout, createTicket, getCart, getOrders, getProducts, getRefunds, getReturns, searchKnowledge, sendChat } from "./api";
+import type { Cart, KnowledgeArticle, Citation, Product } from "./types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -12,6 +12,15 @@ app.innerHTML = `
         <div><strong>Kora Electronics</strong><span>Support Copilot</span></div>
       </header>
 
+      <section class="panel">
+        <h2>Shop products</h2>
+        <div id="products" class="product-list"></div>
+        <button id="cart-toggle" type="button" class="secondary cart-toggle">View cart <span id="cart-count">0</span></button>
+      </section>
+      <section class="panel">
+        <h2>My activity</h2>
+        <div id="account-status" class="account-status"></div>
+      </section>
       <section class="panel">
         <h2>Try asking</h2>
         <div id="prompts" class="prompts">
@@ -51,6 +60,24 @@ app.innerHTML = `
     </section>
   </main>
 
+  <dialog id="cart-dialog">
+    <form id="checkout-form" method="dialog">
+      <h2>Your cart</h2>
+      <div id="cart-items"></div>
+      <div class="checkout-fields">
+        <label>Name<input name="customer_name" required /></label>
+        <label>Email<input name="email" type="email" required /></label>
+        <label>Address<input name="line1" required /></label>
+        <label>City<input name="city" value="Lagos" required /></label>
+        <label>State<input name="state" value="Lagos" required /></label>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="cart-close" class="secondary">Close</button>
+        <button type="submit" class="primary">Place mock order</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="ticket-dialog">
     <form id="ticket-form" method="dialog">
       <h2>Create support ticket</h2>
@@ -73,12 +100,21 @@ const status = document.querySelector<HTMLDivElement>("#status")!;
 const references = document.querySelector<HTMLDivElement>("#references")!;
 const ticketDialog = document.querySelector<HTMLDialogElement>("#ticket-dialog")!;
 const ticketForm = document.querySelector<HTMLFormElement>("#ticket-form")!;
+const productsElement = document.querySelector<HTMLDivElement>("#products")!;
+const cartDialog = document.querySelector<HTMLDialogElement>("#cart-dialog")!;
+const checkoutForm = document.querySelector<HTMLFormElement>("#checkout-form")!;
+const cartItemsElement = document.querySelector<HTMLDivElement>("#cart-items")!;
+const cartCount = document.querySelector<HTMLSpanElement>("#cart-count")!;
+const accountStatus = document.querySelector<HTMLDivElement>("#account-status")!;
+let products: Product[] = [];
+let cart: Cart = { items: [] };
 
 let userId = localStorage.getItem("support-copilot-user-id");
 if (!userId) {
   userId = crypto.randomUUID();
   localStorage.setItem("support-copilot-user-id", userId);
 }
+const currentUserId = userId;
 let sessionId = localStorage.getItem("kora-support-session") || undefined;
 
 function addMessage(role: "user" | "assistant", text: string, citations: Citation[] = []) {
@@ -136,13 +172,105 @@ async function showReference(citation: Citation) {
 }
 
 async function initialize() {
+  products = await getProducts();
+  cart = await getCart(currentUserId);
+  renderProducts();
+  renderCart();
+  await renderAccountStatus();
   addMessage("assistant", "Hi — I’m your Kora support copilot. Ask me about our policies, delivery, or a sample order.");
+}
+
+async function renderAccountStatus() {
+  const [orders, returns, refunds] = await Promise.all([getOrders(currentUserId), getReturns(currentUserId), getRefunds(currentUserId)]);
+  accountStatus.replaceChildren();
+  const summary = document.createElement("p");
+  summary.textContent = `${orders.length} order${orders.length === 1 ? "" : "s"} · ${returns.length} return${returns.length === 1 ? "" : "s"} · ${refunds.length} refund${refunds.length === 1 ? "" : "s"}`;
+  accountStatus.append(summary);
+  for (const record of [...orders.slice(0, 3), ...returns.slice(0, 2), ...refunds.slice(0, 2)] as Record<string, unknown>[]) {
+    const item = document.createElement("div");
+    item.className = "activity-row";
+    item.textContent = `${String(record.order_id || record.return_id || record.refund_id)} · ${String(record.fulfillment_status || record.status)}`;
+    accountStatus.append(item);
+  }
+}
+
+function formatPrice(minor: number) {
+  return new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 }).format(minor / 100);
+}
+
+function renderProducts() {
+  productsElement.replaceChildren();
+  for (const product of products) {
+    const card = document.createElement("article");
+    card.className = "product-card";
+    const name = document.createElement("strong");
+    name.textContent = product.name;
+    const price = document.createElement("span");
+    price.textContent = formatPrice(product.price_minor);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Add";
+    button.disabled = product.stock_quantity < 1;
+    button.addEventListener("click", async () => {
+      cart = await addToCart(currentUserId, product.product_id);
+      renderCart();
+    });
+    card.append(name, price, button);
+    productsElement.append(card);
+  }
+}
+
+function renderCart() {
+  const count = cart.items.reduce((total, item) => total + item.quantity, 0);
+  cartCount.textContent = String(count);
+  cartItemsElement.replaceChildren();
+  if (!count) {
+    const empty = document.createElement("p");
+    empty.textContent = "Your cart is empty.";
+    cartItemsElement.append(empty);
+    return;
+  }
+  for (const item of cart.items) {
+    const product = products.find((entry) => entry.product_id === item.product_id);
+    const row = document.createElement("div");
+    row.className = "cart-row";
+    row.textContent = `${product?.name || item.product_id} × ${item.quantity}`;
+    cartItemsElement.append(row);
+  }
 }
 
 document.querySelectorAll<HTMLButtonElement>("#prompts button").forEach((button) => {
   button.addEventListener("click", () => {
     messageInput.value = button.textContent || "";
     messageInput.focus();
+  });
+
+  document.querySelector<HTMLButtonElement>("#cart-toggle")!.addEventListener("click", () => cartDialog.showModal());
+  document.querySelector<HTMLButtonElement>("#cart-close")!.addEventListener("click", () => cartDialog.close());
+
+  checkoutForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(checkoutForm);
+    try {
+      const order = await checkout({
+        user_id: currentUserId,
+        customer_name: String(data.get("customer_name")),
+        email: String(data.get("email")),
+        line1: String(data.get("line1")),
+        city: String(data.get("city")),
+        state: String(data.get("state")),
+        payment_method: "mock_card",
+      });
+      cart = await getCart(currentUserId);
+      renderCart();
+      await renderAccountStatus();
+      cartDialog.close();
+      checkoutForm.reset();
+      addMessage("assistant", `Order ${order.order_id} was placed successfully. Ask me anytime about its status.`);
+    } catch (error) {
+      addMessage("assistant", error instanceof Error ? error.message : "The order could not be placed.");
+    }
   });
 });
 
@@ -158,7 +286,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     status.textContent = "Searching support articles";
-    const response = await sendChat({ session_id: sessionId, user_id: userId, message });
+    const response = await sendChat({ session_id: sessionId, user_id: currentUserId, message });
     sessionId = response.session_id;
     localStorage.setItem("kora-support-session", sessionId);
     status.textContent = "Answering";
@@ -194,7 +322,7 @@ ticketForm.addEventListener("submit", async (event) => {
   const data = new FormData(ticketForm);
   try {
     await createTicket({
-      user_id: userId,
+      user_id: currentUserId,
       subject: String(data.get("subject")),
       description: String(data.get("description")),
     });

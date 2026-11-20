@@ -57,6 +57,14 @@ button, select { cursor: pointer; }
   text-align: left; padding: 8px 4px; font-size: 13px;
 }
 .prompts button:hover { color: #fff; text-decoration: underline; }
+.product-list { display: grid; gap: 7px; }
+.product-card { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #294866; }
+.product-card strong { font-size: 12px; }
+.product-card span { color: #f2b17f; font-size: 11px; }
+.product-card button { grid-column: 2; grid-row: 1 / span 2; padding: 5px 8px; min-height: 28px; }
+.cart-toggle { width: 100%; margin-top: 10px; }
+.account-status p { color: #cbd6e5; font-size: 11px; margin: 0 0 7px; }
+.activity-row { color: #dfe7f1; font-size: 11px; padding: 6px 0; border-bottom: 1px solid #294866; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .conversation {
   min-width: 0; max-width: 980px; width: 100%; justify-self: center;
@@ -130,6 +138,12 @@ dialog::backdrop { background: rgba(16,35,63,.45); }
 #ticket-form label { display: grid; gap: 5px; font-size: 13px; font-weight: 700; }
 #ticket-form input, #ticket-form textarea { border: 1px solid #cfc8ba; border-radius: 8px; padding: 10px; }
 #ticket-form textarea { min-height: 100px; resize: vertical; }
+#checkout-form { display: grid; gap: 12px; padding: 22px; }
+#checkout-form h2 { margin: 0; }
+.checkout-fields { display: grid; gap: 8px; }
+.checkout-fields label { display: grid; gap: 4px; font-size: 13px; font-weight: 700; }
+.checkout-fields input { border: 1px solid #cfc8ba; border-radius: 8px; padding: 9px; }
+.cart-row { padding: 8px 0; border-bottom: 1px solid #e4dfd5; font-size: 14px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 button:focus-visible, textarea:focus-visible, select:focus-visible, input:focus-visible {

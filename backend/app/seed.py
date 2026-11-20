@@ -10,6 +10,15 @@ CUSTOMERS = [
     {"customer_id": "cust-zainab", "name": "Zainab Bello", "email": "zainab@example.com"},
 ]
 
+PRODUCTS = [
+    {"product_id": "prod-earbuds", "slug": "wireless-earbuds", "name": "Wireless Earbuds", "description": "Compact Bluetooth earbuds with a charging case.", "category": "Audio", "image_url": None, "price_minor": 4500000, "currency": "NGN", "stock_quantity": 18, "status": "active", "warranty_summary": "One-year manufacturer warranty.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+    {"product_id": "prod-charger", "slug": "usb-c-fast-charger", "name": "USB-C Fast Charger", "description": "Compact 30W charger for compatible phones and tablets.", "category": "Power", "image_url": None, "price_minor": 1800000, "currency": "NGN", "stock_quantity": 30, "status": "active", "warranty_summary": "Six-month manufacturer warranty.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+    {"product_id": "prod-speaker", "slug": "portable-bluetooth-speaker", "name": "Portable Bluetooth Speaker", "description": "Water-resistant speaker for everyday listening.", "category": "Audio", "image_url": None, "price_minor": 6250000, "currency": "NGN", "stock_quantity": 12, "status": "active", "warranty_summary": "One-year manufacturer warranty.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+    {"product_id": "prod-keyboard", "slug": "mechanical-keyboard", "name": "Mechanical Keyboard", "description": "Full-size mechanical keyboard with tactile switches.", "category": "Computing", "image_url": None, "price_minor": 7200000, "currency": "NGN", "stock_quantity": 10, "status": "active", "warranty_summary": "One-year manufacturer warranty.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+    {"product_id": "prod-stand", "slug": "adjustable-phone-stand", "name": "Adjustable Phone Stand", "description": "Foldable aluminium stand for desks and travel.", "category": "Accessories", "image_url": None, "price_minor": 950000, "currency": "NGN", "stock_quantity": 25, "status": "active", "warranty_summary": "Thirty-day replacement cover.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+    {"product_id": "prod-powerbank", "slug": "20000mah-power-bank", "name": "20,000mAh Power Bank", "description": "High-capacity USB-C power bank with dual outputs.", "category": "Power", "image_url": None, "price_minor": 5500000, "currency": "NGN", "stock_quantity": 14, "status": "active", "warranty_summary": "One-year manufacturer warranty.", "return_eligible": True, "created_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)},
+]
+
 
 ARTICLES = [
     {"slug": "lagos-same-day-delivery", "title": "Lagos Same-Day Delivery", "body": "Same-day delivery is available for eligible paid orders placed before 12:00 noon within Lagos mainland and island zones. Availability is confirmed at checkout; orders after the cutoff or for ineligible areas move to the next delivery day.", "tags": ["lagos", "delivery", "same-day"], "updated_at": datetime.now(timezone.utc)},
@@ -37,9 +46,11 @@ async def main() -> None:
     db = await connect()
     await db.customers.delete_many({})
     await db.knowledge_articles.delete_many({})
+    await db.products.delete_many({})
     await db.orders.delete_many({})
     await db.customers.insert_many(CUSTOMERS)
     await db.knowledge_articles.insert_many(ARTICLES)
+    await db.products.insert_many(PRODUCTS)
     await db.orders.insert_many(ORDERS)
     print("Seeded demo customers, knowledge articles, and orders.")
     await close()

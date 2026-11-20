@@ -11,6 +11,8 @@ The backend uses the official PyMongo async client for MongoDB connection, CRUD 
 - Verified order-status tool calls scoped to the selected demo customer
 - Safe refusal and human escalation when information is insufficient
 - Mock human-support ticket creation
+- Seeded product catalog, cart, mock checkout, and user-owned orders
+- Return and refund status workflows
 - Responsive, keyboard-accessible vanilla TypeScript interface
 - Limited retries for transient Wekoya/Bridge failures
 - Session persistence in MongoDB and localStorage
@@ -20,8 +22,9 @@ flowchart LR
   U[Customer browser] -->|Vanilla TypeScript fetch| API[FastAPI]
   API --> R[MongoDB text retrieval]
   R --> KB[(knowledge_articles)]
-  API --> O[Verified order tool]
+  API --> O[Verified order, return, and refund tools]
   O --> ORD[(orders)]
+  API --> CAT[(products, carts, returns, refunds)]
   API --> B[Wekoya Bridge OpenAI-compatible API]
   API --> T[(tickets and chat_sessions)]
 ```
@@ -51,7 +54,7 @@ Start MongoDB and Memcached:
 docker compose up -d mongodb memcached
 ```
 
-Create the Python environment and seed demo data:
+Create the Python environment and seed the catalog and support data:
 
 ```bash
 cd backend
