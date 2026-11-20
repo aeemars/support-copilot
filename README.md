@@ -96,6 +96,34 @@ cd frontend
 npm run build
 ```
 
+## Deploy to Render
+
+The repository includes a [`render.yaml`](file:///home/aeemars/Downloads/support%20copilot/render.yaml) Blueprint and [`Procfile`](file:///home/aeemars/Downloads/support%20copilot/Procfile) for zero-config deployment.
+
+### Option 1: Render Blueprint (Recommended)
+1. Push your repository to GitHub.
+2. In the Render Dashboard, click **New +** -> **Blueprint**.
+3. Connect your repository. Render automatically reads `render.yaml` and configures the service.
+4. Set your secret environment variables:
+   - `MONGODB_URI`: Your MongoDB Atlas connection string (e.g. `mongodb+srv://...`).
+   - `WEKOYA_API_KEY`: Your Wekoya Bridge API key.
+5. Click **Apply**.
+
+### Option 2: Manual Web Service
+- **Environment / Runtime:** Python
+- **Build Command:** `cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt`
+- **Start Command:** `cd backend && gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:$PORT app.main:app`
+- **Environment Variables:**
+  - `PYTHON_VERSION`: `3.12.7`
+  - `NODE_VERSION`: `20.18.0`
+  - `MONGODB_URI`: `mongodb+srv://<user>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority`
+  - `MONGODB_DB`: `support_copilot`
+  - `WEKOYA_API_KEY`: your Bridge API key
+  - `WEKOYA_MODEL`: `gemini-2.5-flash-lite`
+  - `CORS_ORIGINS`: `*`
+
+FastAPI automatically serves the compiled SPA frontend from `frontend/dist` on the same origin while serving `/api` endpoints, avoiding cross-origin issues. On first launch against an empty MongoDB Atlas database, the backend automatically seeds the initial catalogue and knowledge articles.
+
 ## Example requests
 
 Health:

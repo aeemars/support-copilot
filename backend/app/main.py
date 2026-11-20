@@ -11,7 +11,13 @@ from app.routers import chat, commerce, health, knowledge, tickets
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await connect()
+    db = await connect()
+    try:
+        from app.seed import seed_if_empty
+        await seed_if_empty(db)
+    except Exception as exc:
+        print(f"Notice: automatic seeding check skipped: {exc}")
+
     if not settings.wekoya_api_key:
         print("WARNING: WEKOYA_API_KEY is not configured; chat requests will be safely disabled.")
     else:
@@ -25,9 +31,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Support Copilot", lifespan=lifespan)
+allow_origins = ["*"] if settings.cors_origins.strip() == "*" else [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,3 +60,12 @@ app.include_router(knowledge.router)
 app.include_router(chat.router)
 app.include_router(tickets.router)
 app.include_router(commerce.router)
+
+# Mount static frontend build for production deployments if present
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if frontend_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+

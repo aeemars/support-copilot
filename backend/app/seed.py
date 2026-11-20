@@ -56,5 +56,14 @@ async def main() -> None:
     await close()
 
 
+async def seed_if_empty(db) -> None:
+    if await db.products.count_documents({}) == 0:
+        await db.customers.insert_many(CUSTOMERS)
+        await db.knowledge_articles.insert_many(ARTICLES)
+        await db.products.insert_many(PRODUCTS)
+        await db.orders.insert_many(ORDERS)
+        print("Auto-seeded initial catalogue, knowledge articles, and demo orders.")
+
+
 if __name__ == "__main__":
     asyncio.run(main())

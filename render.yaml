@@ -1,0 +1,26 @@
+services:
+  # Render Web Service: Full-Stack App (FastAPI serving Vite SPA build)
+  - type: web
+    name: support-copilot
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: "cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt"
+    startCommand: "cd backend && gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:$PORT app.main:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: APP_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: support_copilot
+      - key: WEKOYA_API_KEY
+        sync: false
+      - key: WEKOYA_MODEL
+        value: gemini-2.5-flash-lite
+      - key: CORS_ORIGINS
+        value: "*"
