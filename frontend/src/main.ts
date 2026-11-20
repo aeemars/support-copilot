@@ -267,6 +267,7 @@ form.addEventListener("submit", async (event) => {
     localStorage.setItem("kora-support-session", sessionId);
     status.textContent = "Answering";
     addMessage("assistant", response.answer, response.citations);
+    await renderAccountStatus().catch(() => {});
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
     const internal = /gemini|wekoya|bridge|api key|catalogue|configuration|model/i.test(detail);
