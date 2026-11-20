@@ -50,6 +50,13 @@ async def remove_from_cart(user_id: str, product_id: str):
 
 async def checkout(request: CheckoutRequest) -> dict:
     db = get_db()
+    if request.idempotency_key:
+        existing = await db.orders.find_one(
+            {"user_id": request.user_id, "idempotency_key": request.idempotency_key},
+            {"_id": 0},
+        )
+        if existing:
+            return existing
     cart = await db.carts.find_one({"user_id": request.user_id})
     if not cart or not cart.get("items"):
         raise ValueError("Your cart is empty.")
@@ -68,10 +75,12 @@ async def checkout(request: CheckoutRequest) -> dict:
             "unit_price_minor": product["price_minor"],
             "line_total_minor": line_total,
         })
+    payment_status = "paid" if request.payment_method == "mock_card" else "pending"
     order_id = f"KORA-{uuid4().hex[:8].upper()}"
     order = {
         "order_id": order_id,
         "user_id": request.user_id,
+        "session_id": request.session_id,
         "customer_id": None,
         "customer_snapshot": {"name": request.customer_name, "email": request.email, "phone": request.phone},
         "shipping_address": {"line1": request.line1, "line2": request.line2, "city": request.city, "state": request.state, "country": "NG"},
@@ -80,16 +89,18 @@ async def checkout(request: CheckoutRequest) -> dict:
         "delivery_fee_minor": 250000,
         "total_minor": subtotal + 250000,
         "currency": "NGN",
-        "payment_status": "paid",
+        "payment_status": payment_status,
         "payment_method": request.payment_method,
         "payment_reference": f"MOCK-{uuid4().hex[:10].upper()}",
-        "fulfillment_status": "processing",
+        "fulfillment_status": "processing" if payment_status == "paid" else "awaiting_payment",
         "courier": None,
         "tracking_number": None,
         "estimated_delivery": "2-3 business days",
         "created_at": now(),
         "updated_at": now(),
     }
+    if request.idempotency_key:
+        order["idempotency_key"] = request.idempotency_key
     for item in order_items:
         result = await db.products.update_one(
             {"product_id": item["product_id"], "stock_quantity": {"$gte": item["quantity"]}},
@@ -98,7 +109,14 @@ async def checkout(request: CheckoutRequest) -> dict:
         if result.modified_count != 1:
             raise ValueError("Stock changed while placing the order. Please review your cart and try again.")
     await db.orders.insert_one(order)
-    await db.order_events.insert_one({"event_id": f"EVT-{uuid4().hex}", "order_id": order_id, "user_id": request.user_id, "type": "created", "message": "Order placed successfully.", "created_at": now()})
+    await db.order_events.insert_one({
+        "event_id": f"EVT-{uuid4().hex}",
+        "order_id": order_id,
+        "user_id": request.user_id,
+        "type": "created",
+        "message": "Order placed successfully." if payment_status == "paid" else "Order created and awaiting payment.",
+        "created_at": now(),
+    })
     await db.carts.delete_one({"user_id": request.user_id})
     order.pop("_id", None)
     return order
@@ -121,6 +139,12 @@ async def request_return(order_id: str, request: ReturnRequest):
     order = await db.orders.find_one({"order_id": order_id, "user_id": request.user_id})
     if not order or order["fulfillment_status"] != "delivered":
         raise ValueError("Only delivered orders owned by you can be returned.")
+    existing = await db.returns.find_one(
+        {"order_id": order_id, "user_id": request.user_id, "items": request.items},
+        {"_id": 0},
+    )
+    if existing:
+        return existing
     return_id = f"KORA-RET-{uuid4().hex[:8].upper()}"
     record = {
         "return_id": return_id, "order_id": order_id, "user_id": request.user_id,

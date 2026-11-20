@@ -6,4 +6,4 @@ __pycache__/
 node_modules/
 frontend/dist/
 .DS_Store
-commerce-order-support-plan.md
+conversational-commerce-plan.md

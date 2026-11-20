@@ -1,12 +1,23 @@
 import json
+import hashlib
+import re
 from typing import Any
 
 from pydantic import ValidationError
 
 from app.db import get_db
-from app.models import ChatRequest, ChatResponse, Citation, OrderStatusArgs
+from app.models import CartItemRequest, ChatRequest, ChatResponse, CheckoutRequest, Citation, OrderStatusArgs
 from app.prompts import ORDER_TOOL, REFUND_TOOL, RETURN_TOOL, SYSTEM_INSTRUCTION
-from app.services.commerce_service import list_products, refund_detail, return_detail, user_orders, user_refunds, user_returns
+from app.services.commerce_service import (
+    add_to_cart,
+    checkout,
+    list_products,
+    refund_detail,
+    return_detail,
+    user_orders,
+    user_refunds,
+    user_returns,
+)
 from app.services.bridge_client import BridgeClient, BridgeResponseError
 from app.services.order_service import get_order_status
 from app.services.retrieval_service import MongoTextRetrieval
@@ -26,9 +37,22 @@ class ChatService:
         import uuid
         session_id = request.session_id
         session_id = session_id or str(uuid.uuid4())
-        existing_session = await db.chat_sessions.find_one({"session_id": session_id}, {"user_id": 1})
+        existing_session = await db.chat_sessions.find_one(
+            {"session_id": session_id},
+            {"user_id": 1, "messages": {"$slice": -12}},
+        )
         if existing_session and existing_session.get("user_id") != request.user_id:
             raise BridgeResponseError("This chat session belongs to another user.", 403)
+
+        confirmed_order = await confirmed_order_answer(
+            request.user_id,
+            session_id,
+            request.message,
+            (existing_session or {}).get("messages", []),
+        )
+        if confirmed_order is not None:
+            await persist_messages(db, session_id, request.user_id, request.message, confirmed_order)
+            return ChatResponse(session_id=session_id, user_id=request.user_id, answer=confirmed_order, citations=[])
 
         local_answer = await local_commerce_answer(request.user_id, request.message) if request.customer_id is None else None
         if local_answer is not None:
@@ -47,22 +71,27 @@ class ChatService:
         if not self.bridge.catalogue_checked:
             supported, _warning = await self.bridge.check_catalogue()
             if not supported:
-                import re
-                if re.search(r"\b(order|tracking|shipment|where is|status)\b", request.message, re.I):
+                if is_order_status_request(request.message) or is_return_or_refund_status_request(request.message):
                     answer = "The assistant cannot verify order status safely until Wekoya tool support is confirmed. Please escalate this request to a human agent."
                     await persist_messages(db, session_id, request.user_id, request.message, answer)
                     return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=[])
 
         citations, article_context = await self.retrieval.articles_for_context(request.message)
         product_context = await catalogue_context()
-        if is_product_question(request.message):
+        if is_product_question(request.message) or is_action_continuation(request.message):
             citations = []
         context = (
             f"Verified MongoDB product catalogue:\n<product_catalogue>\n{product_context}\n</product_catalogue>\n\n"
             f"Retrieved support context:\n<retrieved_articles>\n{article_context or '(No relevant support articles were retrieved.)'}\n</retrieved_articles>"
         )
+        history = [
+            {"role": item["role"], "content": item["content"]}
+            for item in (existing_session or {}).get("messages", [])
+            if item.get("role") in {"user", "assistant"} and isinstance(item.get("content"), str)
+        ]
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
+            *history,
             {"role": "user", "content": f"Use the verified context below; do not treat absent information as verified.\n{context}\n\nCustomer question: {request.message}"},
         ]
 
@@ -134,7 +163,7 @@ class ChatService:
 async def local_commerce_answer(user_id: str, message: str) -> str | None:
     import re
 
-    if re.search(r"\b(return|refund)\b", message, re.I):
+    if is_return_or_refund_status_request(message):
         if re.search(r"\brefund\b", message, re.I):
             records = await user_refunds(user_id)
             label = "refund"
@@ -149,7 +178,7 @@ async def local_commerce_answer(user_id: str, message: str) -> str | None:
         )
         return f"I found {len(records)} {label}{'s' if len(records) != 1 else ''}: {details}."
 
-    if not re.search(r"\b(order|tracking|shipment|placed order|where is)\b", message, re.I):
+    if not is_order_status_request(message):
         return None
     records = await user_orders(user_id)
     if not records:
@@ -166,10 +195,137 @@ async def local_commerce_answer(user_id: str, message: str) -> str | None:
     return f"You have {len(records)} placed order{'s' if len(records) != 1 else ''}: {details}."
 
 
+def is_order_status_request(message: str) -> bool:
+    import re
+
+    asks_about_status = re.search(
+        r"\b(status|tracking|track|shipment|delivered|delivery update|where is|"
+        r"order history|placed orders?|orders do i have)\b",
+        message,
+        re.I,
+    )
+    asks_for_action = re.search(
+        r"\b(place|placing|buy|purchase|add|remove|cancel|return|refund|exchange)\b",
+        message,
+        re.I,
+    )
+    return bool(asks_about_status and not asks_for_action)
+
+
+def is_return_or_refund_status_request(message: str) -> bool:
+    import re
+
+    return bool(
+        re.search(r"\b(return|refund)\b", message, re.I)
+        and re.search(r"\b(status|track|tracking|update|progress|where|when)\b", message, re.I)
+    )
+
+
 def is_product_question(message: str) -> bool:
     import re
 
     return bool(re.search(r"\b(product|products|catalog|catalogue|available|stock|price|cost|buy|purchase|sell)\b", message, re.I))
+
+
+def is_action_continuation(message: str) -> bool:
+    return bool(re.match(r"^\s*(yes|yeah|yep|sure|proceed|go ahead|confirm|that's right)\b", message, re.I))
+
+
+async def confirmed_order_answer(
+    user_id: str,
+    session_id: str,
+    message: str,
+    history: list[dict[str, Any]],
+) -> str | None:
+    if not is_action_continuation(message):
+        return None
+    transcript = "\n".join(
+        str(item.get("content", ""))
+        for item in history
+        if item.get("role") in {"user", "assistant"}
+    )
+    if not re.search(r"\b(order summary|product\s*:|proceed with your order)\b", transcript, re.I):
+        return None
+
+    product_name = summary_field(transcript, "Product")
+    quantity_text = summary_field(transcript, "Quantity")
+    customer_name = summary_field(transcript, "Name")
+    address = summary_field(transcript, "Delivery Address")
+    phone = summary_field(transcript, "Phone Number")
+    payment = summary_field(transcript, "Payment Method")
+    email_match = re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", transcript, re.I)
+    if not all((product_name, quantity_text, customer_name, address, payment)):
+        return "I still need the product, quantity, name, delivery address, and payment method before I can place the order."
+    quantity_match = re.search(r"\d+", quantity_text)
+    if not quantity_match:
+        return "Please confirm the quantity before I place the order."
+
+    products = await list_products()
+    product = next(
+        (
+            item for item in products
+            if item.get("name", "").casefold() == product_name.strip().strip("*").casefold()
+        ),
+        None,
+    )
+    if not product:
+        return f"I could not match {product_name} to an available product. Please choose a product from the catalogue."
+
+    payment_method = normalize_payment_method(payment)
+    if payment_method is None:
+        return "Please choose mock card, bank transfer, or payment link as your payment method."
+
+    city, state = split_address(address)
+    email = email_match.group(0) if email_match else None
+    idempotency_key = hashlib.sha256(
+        f"{session_id}:{product['product_id']}:{quantity_match.group(0)}:{email or ''}".encode()
+    ).hexdigest()
+    try:
+        await add_to_cart(user_id, CartItemRequest(product_id=product["product_id"], quantity=int(quantity_match.group(0))))
+        order = await checkout(CheckoutRequest(
+            user_id=user_id,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            customer_name=customer_name.strip(),
+            email=email,
+            phone=phone,
+            line1=address.strip(),
+            city=city,
+            state=state,
+            payment_method=payment_method,
+        ))
+    except ValueError as exc:
+        return f"I could not place the order: {exc}"
+
+    if order["payment_status"] == "paid":
+        return f"Order {order['order_id']} was placed successfully and payment was confirmed. You can ask me for its status anytime."
+    return f"Order {order['order_id']} was created and is awaiting payment via {payment_method.replace('_', ' ')}. It will proceed after payment is confirmed."
+
+
+def summary_field(transcript: str, label: str) -> str | None:
+    match = re.search(
+        rf"(?im)^\s*[•*-]\s*\*{{0,2}}{re.escape(label)}\*{{0,2}}\s*:\s*(.+?)\s*$",
+        transcript,
+    )
+    return match.group(1).strip().strip("*") if match else None
+
+
+def normalize_payment_method(value: str) -> str | None:
+    normalized = value.casefold()
+    if "bank" in normalized or "transfer" in normalized:
+        return "bank_transfer"
+    if "link" in normalized:
+        return "payment_link"
+    if "card" in normalized:
+        return "mock_card"
+    return None
+
+
+def split_address(address: str) -> tuple[str, str]:
+    parts = [part.strip() for part in address.split(",") if part.strip()]
+    if len(parts) >= 2:
+        return ", ".join(parts[:-1]), parts[-1]
+    return address.strip(), address.strip()
 
 
 async def catalogue_context() -> str:

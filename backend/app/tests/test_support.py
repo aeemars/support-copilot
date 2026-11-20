@@ -8,7 +8,7 @@ from app.models import ChatRequest, OrderStatusArgs
 from app.services import chat_service
 from app.services.bridge_client import BridgeResponseError, map_status_error
 from app.services.order_service import get_order_status
-from app.services.chat_service import ChatService, local_commerce_answer
+from app.services.chat_service import ChatService, confirmed_order_answer, local_commerce_answer
 from app.services.bridge_client import BridgeResponseError
 
 
@@ -80,6 +80,79 @@ async def test_order_questions_use_local_mongodb_records(monkeypatch):
     answer = await local_commerce_answer("user-ada", "Do I have any placed order?")
     assert "KORA-ABC123" in answer
     assert "processing" in answer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", [
+    "Place an order for 2 Wireless Earbuds",
+    "I want to place an order",
+    "I want a refund for my damaged item",
+    "Please return this item",
+])
+async def test_commerce_actions_are_not_misclassified_as_status(monkeypatch, message):
+    answer = await local_commerce_answer("user-ada", message)
+    assert answer is None
+
+
+@pytest.mark.asyncio
+async def test_confirmed_order_is_processed_with_payment_state(monkeypatch):
+    monkeypatch.setattr("app.services.chat_service.list_products", AsyncMock(return_value=[{
+        "product_id": "prod-earbuds",
+        "name": "Wireless Earbuds",
+    }]))
+    add = AsyncMock()
+    checkout = AsyncMock(return_value={
+        "order_id": "KORA-NEW123",
+        "payment_status": "paid",
+    })
+    monkeypatch.setattr("app.services.chat_service.add_to_cart", add)
+    monkeypatch.setattr("app.services.chat_service.checkout", checkout)
+    history = [{
+        "role": "assistant",
+        "content": (
+            "Here is your order summary:\n"
+            "• **Product:** Wireless Earbuds\n"
+            "• **Quantity:** 1\n"
+            "• **Name:** Ada Okafor\n"
+            "• **Delivery Address:** 2 Maplewood Estate, Lagos\n"
+            "• **Phone Number:** 08136705593\n"
+            "• **Payment Method:** mock card\n"
+            "• **Email:** ada@example.com"
+        ),
+    }]
+    answer = await confirmed_order_answer("user-ada", "session-1", "confirm order", history)
+    assert "KORA-NEW123" in answer
+    add.assert_awaited_once()
+    checkout.assert_awaited_once()
+    assert checkout.call_args.args[0].payment_method == "mock_card"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_bank_transfer_order_waits_for_payment(monkeypatch):
+    monkeypatch.setattr("app.services.chat_service.list_products", AsyncMock(return_value=[{
+        "product_id": "prod-earbuds",
+        "name": "Wireless Earbuds",
+    }]))
+    monkeypatch.setattr("app.services.chat_service.add_to_cart", AsyncMock())
+    monkeypatch.setattr("app.services.chat_service.checkout", AsyncMock(return_value={
+        "order_id": "KORA-NEW124",
+        "payment_status": "pending",
+    }))
+    answer = await confirmed_order_answer(
+        "user-ada",
+        "session-1",
+        "proceed with the order",
+        [{"role": "assistant", "content": (
+            "Order summary:\n"
+            "• Product: Wireless Earbuds\n"
+            "• Quantity: 1\n"
+            "• Name: Ada Okafor\n"
+            "• Delivery Address: 2 Maplewood Estate, Lagos\n"
+            "• Payment Method: bank transfer\n"
+            "Email: ada@example.com"
+        )}],
+    )
+    assert "awaiting payment" in answer
 
 
 @pytest.mark.asyncio
@@ -201,6 +274,36 @@ async def test_product_questions_use_verified_catalogue_context(monkeypatch):
     assert "Wireless Earbuds" in sent_message
     assert "NGN 45,000.00" in sent_message
     assert response.citations == []
+
+
+@pytest.mark.asyncio
+async def test_chat_includes_bounded_session_history(monkeypatch):
+    db = FakeDB(customer=True)
+    db.chat_sessions.find_one = AsyncMock(return_value={
+        "user_id": "user-ada",
+        "messages": [
+            {"role": "user", "content": "I want Wireless Earbuds"},
+            {"role": "assistant", "content": "They are available for NGN 45,000."},
+        ],
+    })
+    db.products = object()
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+    monkeypatch.setattr("app.services.chat_service.list_products", AsyncMock(return_value=[]))
+    bridge = SimpleNamespace(
+        catalogue_checked=True,
+        tools_supported=False,
+        create=AsyncMock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Please provide your delivery details.", tool_calls=None))],
+            usage=None,
+        )),
+    )
+    retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
+    await ChatService(bridge=bridge, retrieval=retrieval).chat(
+        ChatRequest(user_id="user-ada", session_id="session-1", customer_id="cust-ada", message="yes")
+    )
+    messages = bridge.create.call_args.kwargs["messages"]
+    assert messages[1]["content"] == "I want Wireless Earbuds"
+    assert messages[2]["content"] == "They are available for NGN 45,000."
 
 
 @pytest.mark.asyncio

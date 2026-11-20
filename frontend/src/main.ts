@@ -1,6 +1,6 @@
 import "./styles.css";
-import { addToCart, checkout, createTicket, getCart, getOrders, getProducts, getRefunds, getReturns, searchKnowledge, sendChat } from "./api";
-import type { Cart, KnowledgeArticle, Citation, Product } from "./types";
+import { createTicket, getOrders, getRefunds, getReturns, searchKnowledge, sendChat } from "./api";
+import type { KnowledgeArticle, Citation } from "./types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -12,11 +12,6 @@ app.innerHTML = `
         <div><strong>Kora Electronics</strong><span>Support Copilot</span></div>
       </header>
 
-      <section class="panel">
-        <h2>Shop products</h2>
-        <div id="products" class="product-list"></div>
-        <button id="cart-toggle" type="button" class="secondary cart-toggle">View cart <span id="cart-count">0</span></button>
-      </section>
       <section class="panel">
         <h2>My activity</h2>
         <div id="account-status" class="account-status"></div>
@@ -60,24 +55,6 @@ app.innerHTML = `
     </section>
   </main>
 
-  <dialog id="cart-dialog">
-    <form id="checkout-form" method="dialog">
-      <h2>Your cart</h2>
-      <div id="cart-items"></div>
-      <div class="checkout-fields">
-        <label>Name<input name="customer_name" required /></label>
-        <label>Email<input name="email" type="email" required /></label>
-        <label>Address<input name="line1" required /></label>
-        <label>City<input name="city" value="Lagos" required /></label>
-        <label>State<input name="state" value="Lagos" required /></label>
-      </div>
-      <div class="dialog-actions">
-        <button type="button" id="cart-close" class="secondary">Close</button>
-        <button type="submit" class="primary">Place mock order</button>
-      </div>
-    </form>
-  </dialog>
-
   <dialog id="ticket-dialog">
     <form id="ticket-form" method="dialog">
       <h2>Create support ticket</h2>
@@ -100,14 +77,7 @@ const status = document.querySelector<HTMLDivElement>("#status")!;
 const references = document.querySelector<HTMLDivElement>("#references")!;
 const ticketDialog = document.querySelector<HTMLDialogElement>("#ticket-dialog")!;
 const ticketForm = document.querySelector<HTMLFormElement>("#ticket-form")!;
-const productsElement = document.querySelector<HTMLDivElement>("#products")!;
-const cartDialog = document.querySelector<HTMLDialogElement>("#cart-dialog")!;
-const checkoutForm = document.querySelector<HTMLFormElement>("#checkout-form")!;
-const cartItemsElement = document.querySelector<HTMLDivElement>("#cart-items")!;
-const cartCount = document.querySelector<HTMLSpanElement>("#cart-count")!;
 const accountStatus = document.querySelector<HTMLDivElement>("#account-status")!;
-let products: Product[] = [];
-let cart: Cart = { items: [] };
 
 let userId = localStorage.getItem("support-copilot-user-id");
 if (!userId) {
@@ -127,9 +97,7 @@ function addMessage(role: "user" | "assistant", text: string, citations: Citatio
 
   const bubble = document.createElement("div");
   bubble.className = "bubble";
-  const copy = document.createElement("p");
-  copy.textContent = text;
-  bubble.append(copy);
+  appendResponseContent(bubble, text);
 
   if (citations.length) {
     const heading = document.createElement("h3");
@@ -149,6 +117,90 @@ function addMessage(role: "user" | "assistant", text: string, citations: Citatio
   row.append(avatar, bubble);
   transcript.append(row);
   transcript.scrollTop = transcript.scrollHeight;
+}
+
+function appendResponseContent(bubble: HTMLDivElement, text: string) {
+  const lines = text.split(/\r?\n/);
+  const products = lines.map(parseProductLine).filter((product): product is ProductResponse => Boolean(product));
+
+  if (products.length >= 2) {
+    const firstProduct = lines.findIndex((line) => Boolean(parseProductLine(line)));
+    const intro = lines.slice(0, firstProduct).join(" ").trim();
+    if (intro) {
+      const copy = document.createElement("p");
+      copy.textContent = intro;
+      bubble.append(copy);
+    }
+
+    const heading = document.createElement("div");
+    heading.className = "response-heading";
+    heading.textContent = "Available products";
+    bubble.append(heading);
+
+    const grid = document.createElement("div");
+    grid.className = "product-response-grid";
+    for (const product of products) {
+      const card = document.createElement("article");
+      card.className = "product-response-card";
+      const name = document.createElement("h4");
+      name.textContent = product.name;
+      const detail = document.createElement("p");
+      detail.textContent = product.detail;
+      const stock = document.createElement("span");
+      stock.className = "stock-badge";
+      stock.textContent = `${product.stock} in stock`;
+      card.append(name, detail, stock);
+      grid.append(card);
+    }
+    bubble.append(grid);
+    return;
+  }
+
+  const list = document.createElement("ul");
+  let hasListItems = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^[*-]\s+/.test(trimmed)) {
+      const item = document.createElement("li");
+      appendRichText(item, trimmed.replace(/^[*-]\s+/, ""));
+      list.append(item);
+      hasListItems = true;
+    } else {
+      const copy = document.createElement("p");
+      appendRichText(copy, trimmed);
+      bubble.append(copy);
+    }
+  }
+  if (hasListItems) bubble.append(list);
+}
+
+function appendRichText(parent: HTMLElement, text: string) {
+  const parts = text.split(/(\*\*.+?\*\*)/g);
+  for (const part of parts) {
+    if (!part) continue;
+    if (part.startsWith("**") && part.endsWith("**")) {
+      const strong = document.createElement("strong");
+      strong.textContent = part.slice(2, -2);
+      parent.append(strong);
+    } else {
+      parent.append(document.createTextNode(part));
+    }
+  }
+}
+
+interface ProductResponse {
+  name: string;
+  detail: string;
+  stock: string;
+}
+
+function parseProductLine(line: string): ProductResponse | undefined {
+  const withId = line.match(/^\s*(?:[*-]|•)\s+\*{0,2}(.+?)\*{0,2}\s+\(product_id:\s*[^)]+\):\s*(.+?)\s+-\s+(\d+)\s+in stock\s*$/i);
+  const compact = line.match(/^\s*(?:[*-]|•)\s+\*{0,2}(.+?)\*{0,2}:\s*(.+?)\s+\((\d+)\s+in stock\)\s*$/i);
+  const match = withId || compact;
+  if (!match) return undefined;
+  return { name: match[1].trim(), detail: match[2].trim(), stock: match[3] };
 }
 
 async function showReference(citation: Citation) {
@@ -172,10 +224,6 @@ async function showReference(citation: Citation) {
 }
 
 async function initialize() {
-  products = await getProducts();
-  cart = await getCart(currentUserId);
-  renderProducts();
-  renderCart();
   await renderAccountStatus();
   addMessage("assistant", "Hi — I’m your Kora support copilot. Ask me about our policies, delivery, or a sample order.");
 }
@@ -194,84 +242,12 @@ async function renderAccountStatus() {
   }
 }
 
-function formatPrice(minor: number) {
-  return new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 }).format(minor / 100);
-}
-
-function renderProducts() {
-  productsElement.replaceChildren();
-  for (const product of products) {
-    const card = document.createElement("article");
-    card.className = "product-card";
-    const name = document.createElement("strong");
-    name.textContent = product.name;
-    const price = document.createElement("span");
-    price.textContent = formatPrice(product.price_minor);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary";
-    button.textContent = "Add";
-    button.disabled = product.stock_quantity < 1;
-    button.addEventListener("click", async () => {
-      cart = await addToCart(currentUserId, product.product_id);
-      renderCart();
-    });
-    card.append(name, price, button);
-    productsElement.append(card);
-  }
-}
-
-function renderCart() {
-  const count = cart.items.reduce((total, item) => total + item.quantity, 0);
-  cartCount.textContent = String(count);
-  cartItemsElement.replaceChildren();
-  if (!count) {
-    const empty = document.createElement("p");
-    empty.textContent = "Your cart is empty.";
-    cartItemsElement.append(empty);
-    return;
-  }
-  for (const item of cart.items) {
-    const product = products.find((entry) => entry.product_id === item.product_id);
-    const row = document.createElement("div");
-    row.className = "cart-row";
-    row.textContent = `${product?.name || item.product_id} × ${item.quantity}`;
-    cartItemsElement.append(row);
-  }
-}
-
 document.querySelectorAll<HTMLButtonElement>("#prompts button").forEach((button) => {
   button.addEventListener("click", () => {
     messageInput.value = button.textContent || "";
     messageInput.focus();
   });
 
-  document.querySelector<HTMLButtonElement>("#cart-toggle")!.addEventListener("click", () => cartDialog.showModal());
-  document.querySelector<HTMLButtonElement>("#cart-close")!.addEventListener("click", () => cartDialog.close());
-
-  checkoutForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const data = new FormData(checkoutForm);
-    try {
-      const order = await checkout({
-        user_id: currentUserId,
-        customer_name: String(data.get("customer_name")),
-        email: String(data.get("email")),
-        line1: String(data.get("line1")),
-        city: String(data.get("city")),
-        state: String(data.get("state")),
-        payment_method: "mock_card",
-      });
-      cart = await getCart(currentUserId);
-      renderCart();
-      await renderAccountStatus();
-      cartDialog.close();
-      checkoutForm.reset();
-      addMessage("assistant", `Order ${order.order_id} was placed successfully. Ask me anytime about its status.`);
-    } catch (error) {
-      addMessage("assistant", error instanceof Error ? error.message : "The order could not be placed.");
-    }
-  });
 });
 
 form.addEventListener("submit", async (event) => {

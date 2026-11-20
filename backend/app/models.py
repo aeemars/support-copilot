@@ -54,8 +54,10 @@ class CartItemRequest(BaseModel):
 
 class CheckoutRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
+    session_id: str | None = Field(default=None, max_length=128)
+    idempotency_key: str | None = Field(default=None, max_length=200)
     customer_name: str = Field(min_length=1, max_length=120)
-    email: str = Field(min_length=3, max_length=200)
+    email: str | None = Field(default=None, min_length=3, max_length=200)
     phone: str | None = Field(default=None, max_length=40)
     line1: str = Field(min_length=1, max_length=200)
     line2: str | None = Field(default=None, max_length=200)

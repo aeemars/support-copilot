@@ -25,6 +25,12 @@ async def ensure_indexes(db: AsyncDatabase) -> None:
     await db.products.create_index("slug", unique=True)
     await db.carts.create_index("user_id", unique=True)
     await db.orders.create_index("order_id", unique=True)
+    await db.orders.create_index(
+        [("user_id", pymongo.ASCENDING), ("idempotency_key", pymongo.ASCENDING)],
+        unique=True,
+        partialFilterExpression={"idempotency_key": {"$type": "string"}},
+        name="unique_user_idempotency_key",
+    )
     await db.orders.create_index([("user_id", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)])
     await db.order_events.create_index([("order_id", pymongo.ASCENDING), ("created_at", pymongo.ASCENDING)])
     await db.tickets.create_index("ticket_id", unique=True)
