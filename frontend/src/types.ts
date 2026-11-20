@@ -1,18 +1,3 @@
-export interface Customer {
-  customer_id: string;
-  name: string;
-  email: string;
-}
-
-export interface Order {
-  order_id: string;
-  status: string;
-  items: { name: string; quantity: number }[];
-  tracking_number?: string | null;
-  courier?: string;
-  estimated_delivery?: string;
-}
-
 export interface Citation {
   slug: string;
   title: string;

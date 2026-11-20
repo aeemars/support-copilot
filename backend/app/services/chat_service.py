@@ -9,6 +9,7 @@ from app.prompts import SYSTEM_INSTRUCTION, ORDER_TOOL
 from app.services.bridge_client import BridgeClient, BridgeResponseError
 from app.services.order_service import get_order_status
 from app.services.retrieval_service import MongoTextRetrieval
+from app.services.activity_cache import activity_cache
 
 
 class ChatService:
@@ -18,22 +19,24 @@ class ChatService:
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         db = get_db()
-        customer = await db.customers.find_one({"customer_id": request.customer_id})
-        if not customer:
+        if request.customer_id and not await db.customers.find_one({"customer_id": request.customer_id}):
             raise BridgeResponseError("The selected demo customer is invalid.", 400)
 
         import uuid
         session_id = request.session_id
         session_id = session_id or str(uuid.uuid4())
+        existing_session = await db.chat_sessions.find_one({"session_id": session_id}, {"user_id": 1})
+        if existing_session and existing_session.get("user_id") != request.user_id:
+            raise BridgeResponseError("This chat session belongs to another user.", 403)
 
         ensure_end_user = getattr(self.bridge, "ensure_end_user", None)
         end_user_ready = True
         if ensure_end_user is not None:
-            end_user_ready, _end_user_warning = await ensure_end_user(request.customer_id)
+            end_user_ready, _end_user_warning = await ensure_end_user(request.user_id)
         if not end_user_ready:
             answer = "The support assistant is temporarily unavailable. Please try again later or escalate this conversation to a human agent."
             await persist_messages(db, session_id, request.customer_id, request.message, answer)
-            return ChatResponse(session_id=session_id, answer=answer, citations=[])
+            return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=[])
 
         if not self.bridge.catalogue_checked:
             supported, _warning = await self.bridge.check_catalogue()
@@ -42,7 +45,7 @@ class ChatService:
                 if re.search(r"\b(order|tracking|shipment|where is|status)\b", request.message, re.I):
                     answer = "The assistant cannot verify order status safely until Wekoya tool support is confirmed. Please escalate this request to a human agent."
                     await persist_messages(db, session_id, request.customer_id, request.message, answer)
-                    return ChatResponse(session_id=session_id, answer=answer, citations=[])
+                    return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=[])
 
         citations, article_context = await self.retrieval.articles_for_context(request.message)
         context = article_context or "(No relevant support articles were retrieved.)"
@@ -57,7 +60,7 @@ class ChatService:
             response = await self.bridge.create(
                 messages=messages,
                 tools=[ORDER_TOOL] if getattr(self.bridge, "tools_supported", False) else None,
-                customer_id=request.customer_id,
+                customer_id=request.user_id,
             )
             choice = response.choices[0]
             assistant_message = choice.message
@@ -65,8 +68,8 @@ class ChatService:
             tool_calls = getattr(assistant_message, "tool_calls", None)
             if not tool_calls:
                 answer = assistant_message.content or "I do not have enough verified information to answer. I recommend escalation to a human agent."
-                await persist_messages(db, session_id, request.customer_id, request.message, answer)
-                return ChatResponse(session_id=session_id, answer=answer, citations=citations, tool_used=tool_used, usage=usage)
+                await persist_messages(db, session_id, request.user_id, request.message, answer)
+                return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=citations, tool_used=tool_used, usage=usage)
 
             tool_call = tool_calls[0]
             if getattr(tool_call, "function", None) is None or tool_call.function.name != "get_order_status":
@@ -78,7 +81,11 @@ class ChatService:
             except (json.JSONDecodeError, ValidationError):
                 tool_result = {"found": False, "message": "The order ID could not be validated."}
             else:
-                tool_result = await get_order_status(request.customer_id, parsed)
+                tool_result = (
+                    await get_order_status(request.customer_id, parsed)
+                    if request.customer_id
+                    else {"found": False, "message": "Order status requires an authenticated customer account."}
+                )
                 tool_used = "get_order_status"
 
             messages.append({
@@ -102,17 +109,18 @@ class ChatService:
             })
 
         answer = "I could not complete that request safely within the available steps. Please try again or escalate to a human agent."
-        await persist_messages(db, session_id, request.customer_id, request.message, answer)
-        return ChatResponse(session_id=session_id, answer=answer, citations=citations, tool_used=tool_used, usage=usage)
+        await persist_messages(db, session_id, request.user_id, request.message, answer)
+        return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=citations, tool_used=tool_used, usage=usage)
 
 
-async def persist_messages(db, session_id: str, customer_id: str, user_message: str, assistant_message: str) -> None:
+async def persist_messages(db, session_id: str, user_id: str, user_message: str, assistant_message: str) -> None:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     await db.chat_sessions.update_one(
-        {"session_id": session_id},
+        {"session_id": session_id, "user_id": user_id},
         {
-            "$set": {"customer_id": customer_id},
+            "$set": {"user_id": user_id},
+            "$inc": {"message_count": 2},
             "$push": {"messages": {"$each": [
                 {"role": "user", "content": user_message, "created_at": now},
                 {"role": "assistant", "content": assistant_message, "created_at": now},
@@ -120,3 +128,4 @@ async def persist_messages(db, session_id: str, customer_id: str, user_message: 
         },
         upsert=True,
     )
+    await activity_cache.record(user_id, session_id, 2, user_message)

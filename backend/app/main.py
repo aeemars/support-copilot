@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import connect, close
+from app.services.activity_cache import activity_cache
 from app.routers import chat, health, knowledge, tickets
 
 
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
         if not supported:
             print(f"WARNING: {warning}")
     yield
+    await activity_cache.close()
     await close()
 
 

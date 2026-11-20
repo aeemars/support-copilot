@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     wekoya_model: str = "gemini-2.5-flash-lite"
     cors_origins: str = "http://localhost:5173"
     app_env: str = "development"
+    memcached_host: str = "localhost"
+    memcached_port: int = 11211
+    memcached_activity_ttl_seconds: int = 86400
 
     model_config = SettingsConfigDict(
         env_file=[".env", "backend/.env", "../.env"],

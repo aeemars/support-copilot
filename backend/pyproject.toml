@@ -6,6 +6,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.34",
   "pymongo>=4.20",
+  "aiomcache>=0.8",
   "pydantic>=2.10",
   "pydantic-settings>=2.7",
   "openai>=1.59",

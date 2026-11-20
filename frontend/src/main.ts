@@ -1,6 +1,6 @@
 import "./styles.css";
-import { createTicket, getCustomers, getOrders, searchKnowledge, sendChat } from "./api";
-import type { Customer, KnowledgeArticle, Order, ChatResponse, Citation } from "./types";
+import { createTicket, searchKnowledge, sendChat } from "./api";
+import type { KnowledgeArticle, Citation } from "./types";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -11,16 +11,6 @@ app.innerHTML = `
         <div class="brand-mark" aria-hidden="true">K</div>
         <div><strong>Kora Electronics</strong><span>Support Copilot</span></div>
       </header>
-
-      <section class="panel">
-        <label for="customer">Demo customer</label>
-        <select id="customer" aria-label="Choose demo customer"></select>
-      </section>
-
-      <section class="panel">
-        <h2>Sample orders</h2>
-        <div id="orders" class="order-list"></div>
-      </section>
 
       <section class="panel">
         <h2>Try asking</h2>
@@ -64,7 +54,7 @@ app.innerHTML = `
   <dialog id="ticket-dialog">
     <form id="ticket-form" method="dialog">
       <h2>Create support ticket</h2>
-      <p>A mock human-support request will be saved for this demo customer.</p>
+      <p>A mock human-support request will be saved for this conversation.</p>
       <label>Subject<input name="subject" maxlength="200" required /></label>
       <label>Description<textarea name="description" maxlength="4000" required></textarea></label>
       <div class="dialog-actions">
@@ -75,8 +65,6 @@ app.innerHTML = `
   </dialog>
 `;
 
-const customerSelect = document.querySelector<HTMLSelectElement>("#customer")!;
-const ordersElement = document.querySelector<HTMLDivElement>("#orders")!;
 const transcript = document.querySelector<HTMLDivElement>("#transcript")!;
 const form = document.querySelector<HTMLFormElement>("#composer")!;
 const messageInput = document.querySelector<HTMLTextAreaElement>("#message")!;
@@ -86,8 +74,11 @@ const references = document.querySelector<HTMLDivElement>("#references")!;
 const ticketDialog = document.querySelector<HTMLDialogElement>("#ticket-dialog")!;
 const ticketForm = document.querySelector<HTMLFormElement>("#ticket-form")!;
 
-let customers: Customer[] = [];
-let selectedCustomer = "";
+let userId = localStorage.getItem("support-copilot-user-id");
+if (!userId) {
+  userId = crypto.randomUUID();
+  localStorage.setItem("support-copilot-user-id", userId);
+}
 let sessionId = localStorage.getItem("kora-support-session") || undefined;
 
 function addMessage(role: "user" | "assistant", text: string, citations: Citation[] = []) {
@@ -144,44 +135,9 @@ async function showReference(citation: Citation) {
   card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-async function renderOrders(customerId: string) {
-  const orders: Order[] = await getOrders(customerId);
-  ordersElement.replaceChildren();
-  for (const order of orders) {
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "order";
-    const id = document.createElement("strong");
-    id.textContent = order.order_id;
-    const state = document.createElement("span");
-    state.textContent = order.status;
-    card.append(id, state);
-    card.addEventListener("click", () => {
-      messageInput.value = `Where is order ${order.order_id}?`;
-      messageInput.focus();
-    });
-    ordersElement.append(card);
-  }
-}
-
 async function initialize() {
-  customers = await getCustomers();
-  customerSelect.replaceChildren();
-  for (const customer of customers) {
-    const option = document.createElement("option");
-    option.value = customer.customer_id;
-    option.textContent = customer.name;
-    customerSelect.append(option);
-  }
-  selectedCustomer = customers[0]?.customer_id || "";
-  await renderOrders(selectedCustomer);
   addMessage("assistant", "Hi — I’m your Kora support copilot. Ask me about our policies, delivery, or a sample order.");
 }
-
-customerSelect.addEventListener("change", async () => {
-  selectedCustomer = customerSelect.value;
-  await renderOrders(selectedCustomer);
-});
 
 document.querySelectorAll<HTMLButtonElement>("#prompts button").forEach((button) => {
   button.addEventListener("click", () => {
@@ -202,7 +158,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     status.textContent = "Searching support articles";
-    const response = await sendChat({ session_id: sessionId, customer_id: selectedCustomer, message });
+    const response = await sendChat({ session_id: sessionId, user_id: userId, message });
     sessionId = response.session_id;
     localStorage.setItem("kora-support-session", sessionId);
     status.textContent = "Answering";
@@ -238,13 +194,13 @@ ticketForm.addEventListener("submit", async (event) => {
   const data = new FormData(ticketForm);
   try {
     await createTicket({
-      customer_id: selectedCustomer,
+      user_id: userId,
       subject: String(data.get("subject")),
       description: String(data.get("description")),
     });
     ticketDialog.close();
     ticketForm.reset();
-    addMessage("assistant", "Your support ticket was created. A human agent would follow up through the selected customer’s support channel.");
+    addMessage("assistant", "Your support ticket was created. A human agent would follow up through this support conversation.");
   } catch (error) {
     addMessage("assistant", error instanceof Error ? error.message : "The ticket could not be created.");
   }

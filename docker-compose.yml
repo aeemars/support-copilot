@@ -6,6 +6,11 @@ services:
       - "27017:27017"
     volumes:
       - support_copilot_mongo:/data/db
+  memcached:
+    image: memcached:1.6-alpine
+    restart: unless-stopped
+    ports:
+      - "11211:11211"
 
 volumes:
   support_copilot_mongo:

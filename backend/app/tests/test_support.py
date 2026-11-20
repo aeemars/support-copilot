@@ -9,6 +9,7 @@ from app.services import chat_service
 from app.services.bridge_client import BridgeResponseError, map_status_error
 from app.services.order_service import get_order_status
 from app.services.chat_service import ChatService
+from app.services.bridge_client import BridgeResponseError
 
 
 class FakeCollection:
@@ -85,7 +86,7 @@ async def test_unsupported_question_has_safe_escalation(monkeypatch):
     )
     retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
     response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
-        ChatRequest(customer_id="cust-ada", message="What is my bank account balance?")
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="What is my bank account balance?")
     )
     assert "human agent" in response.answer.lower()
     assert response.citations == []
@@ -107,7 +108,7 @@ async def test_configuration_failure_returns_no_internal_details(monkeypatch):
     )
     retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
     response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
-        ChatRequest(customer_id="cust-ada", message="What is your return policy?")
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="What is your return policy?")
     )
 
     assert "human agent" in response.answer.lower()
@@ -115,6 +116,22 @@ async def test_configuration_failure_returns_no_internal_details(monkeypatch):
     assert "configuration" not in response.answer.lower()
     assert response.citations == []
     retrieval.articles_for_context.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_session_cannot_be_reused_by_another_user(monkeypatch):
+    db = FakeDB(customer=True)
+    db.chat_sessions.find_one = AsyncMock(return_value={"user_id": "user-other"})
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+
+    with pytest.raises(BridgeResponseError) as error:
+        await ChatService().chat(ChatRequest(
+            user_id="user-ada",
+            session_id="session-owned-by-other",
+            message="Hello",
+        ))
+
+    assert error.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -132,7 +149,7 @@ async def test_citations_are_limited_to_retrieved_articles(monkeypatch):
     )
     retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=( [citation], "<article>Return policy</article>" )))
     response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
-        ChatRequest(customer_id="cust-ada", message="What is the return policy?")
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="What is the return policy?")
     )
     assert len(response.citations) == 1
     assert response.citations[0].slug == "returns-policy"
@@ -145,6 +162,7 @@ async def test_ticket_creation_works(monkeypatch):
     from app.routers.tickets import create_ticket
     from app.models import TicketRequest
     response = await create_ticket(TicketRequest(
+        user_id="user-ada",
         customer_id="cust-ada",
         subject="Damaged item",
         description="My item arrived damaged.",
@@ -185,7 +203,7 @@ async def test_tool_loop_limit(monkeypatch):
     )
     retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
     response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
-        ChatRequest(customer_id="cust-ada", message="Where is KORA-1001?")
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="Where is KORA-1001?")
     )
     assert bridge.create.await_count == 5
     assert "could not complete" in response.answer.lower()

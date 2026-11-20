@@ -2,7 +2,7 @@
 
 Support Copilot is a polished portfolio MVP for a fictional Lagos electronics retailer, **Kora Electronics**. It combines curated MongoDB support articles, verified demo order records, and Wekoya Bridge AI into a compact customer-support experience.
 
-The backend uses the official PyMongo async client for MongoDB connection, CRUD operations, and index management.
+The backend uses the official PyMongo async client for MongoDB connection, CRUD operations, and index management. Memcached tracks lightweight user/session activity while MongoDB remains the durable source of truth.
 
 ## Features
 
@@ -45,10 +45,10 @@ The API key is used only by the FastAPI server. Never add it to frontend files o
 
 ## Start locally
 
-Start MongoDB:
+Start MongoDB and Memcached:
 
 ```bash
-docker compose up -d mongodb
+docker compose up -d mongodb memcached
 ```
 
 Create the Python environment and seed demo data:
@@ -77,6 +77,8 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+The browser creates a stable anonymous `user_id` in localStorage. Each chat session is ownership-checked against that user ID. Memcached stores only short-lived activity metadata; it is safe to lose or restart.
+
 ## Tests
 
 ```bash
@@ -104,7 +106,7 @@ Chat:
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"customer_id":"cust-ada","message":"What is your return policy?"}'
+  -d '{"user_id":"browser-user-123","message":"What is your return policy?"}'
 ```
 
 Order status:
@@ -112,7 +114,7 @@ Order status:
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"customer_id":"cust-ada","message":"Where is order KORA-1001?"}'
+  -d '{"user_id":"browser-user-123","message":"Where is order KORA-1001?"}'
 ```
 
 Create a ticket:
@@ -120,7 +122,7 @@ Create a ticket:
 ```bash
 curl -X POST http://localhost:8000/api/tickets \
   -H 'Content-Type: application/json' \
-  -d '{"customer_id":"cust-ada","subject":"Damaged item","description":"My item arrived damaged."}'
+  -d '{"user_id":"browser-user-123","subject":"Damaged item","description":"My item arrived damaged."}'
 ```
 
 ## Screenshot

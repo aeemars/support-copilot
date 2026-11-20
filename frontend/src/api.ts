@@ -1,4 +1,4 @@
-import type { ChatResponse, Customer, KnowledgeArticle, Order } from "./types";
+import type { ChatResponse, KnowledgeArticle } from "./types";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -12,12 +12,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
-export const getCustomers = () => request<Customer[]>("/api/customers");
-export const getOrders = (customerId: string) =>
-  request<Order[]>(`/api/customers/${encodeURIComponent(customerId)}/orders`);
 export const searchKnowledge = (query: string) =>
   request<{ articles: KnowledgeArticle[] }>(`/api/knowledge/search?q=${encodeURIComponent(query)}`);
-export const sendChat = (body: { session_id?: string; customer_id: string; message: string }) =>
+export const sendChat = (body: { session_id?: string; user_id: string; message: string }) =>
   request<ChatResponse>("/api/chat", { method: "POST", body: JSON.stringify(body) });
-export const createTicket = (body: { customer_id: string; subject: string; description: string }) =>
+export const createTicket = (body: { user_id: string; subject: string; description: string }) =>
   request<unknown>("/api/tickets", { method: "POST", body: JSON.stringify(body) });
