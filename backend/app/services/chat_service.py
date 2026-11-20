@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from app.db import get_db
 from app.models import ChatRequest, ChatResponse, Citation, OrderStatusArgs
 from app.prompts import ORDER_TOOL, REFUND_TOOL, RETURN_TOOL, SYSTEM_INSTRUCTION
-from app.services.commerce_service import refund_detail, return_detail, user_orders, user_refunds, user_returns
+from app.services.commerce_service import list_products, refund_detail, return_detail, user_orders, user_refunds, user_returns
 from app.services.bridge_client import BridgeClient, BridgeResponseError
 from app.services.order_service import get_order_status
 from app.services.retrieval_service import MongoTextRetrieval
@@ -54,10 +54,16 @@ class ChatService:
                     return ChatResponse(session_id=session_id, user_id=request.user_id, answer=answer, citations=[])
 
         citations, article_context = await self.retrieval.articles_for_context(request.message)
-        context = article_context or "(No relevant support articles were retrieved.)"
+        product_context = await catalogue_context()
+        if is_product_question(request.message):
+            citations = []
+        context = (
+            f"Verified MongoDB product catalogue:\n<product_catalogue>\n{product_context}\n</product_catalogue>\n\n"
+            f"Retrieved support context:\n<retrieved_articles>\n{article_context or '(No relevant support articles were retrieved.)'}\n</retrieved_articles>"
+        )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": f"Retrieved support context (use only this context):\n<retrieved_articles>\n{context}\n</retrieved_articles>\n\nCustomer question: {request.message}"},
+            {"role": "user", "content": f"Use the verified context below; do not treat absent information as verified.\n{context}\n\nCustomer question: {request.message}"},
         ]
 
         tool_used = None
@@ -158,6 +164,34 @@ async def local_commerce_answer(user_id: str, message: str) -> str | None:
         for order in records[:5]
     )
     return f"You have {len(records)} placed order{'s' if len(records) != 1 else ''}: {details}."
+
+
+def is_product_question(message: str) -> bool:
+    import re
+
+    return bool(re.search(r"\b(product|products|catalog|catalogue|available|stock|price|cost|buy|purchase|sell)\b", message, re.I))
+
+
+async def catalogue_context() -> str:
+    if not hasattr(get_db(), "products"):
+        return "(No active products are currently available.)"
+    products = await list_products()
+    if not products:
+        return "(No active products are currently available.)"
+    lines = []
+    for product in products:
+        price = product.get("price_minor")
+        price_text = f"NGN {price / 100:,.2f}" if isinstance(price, (int, float)) else "Price unavailable"
+        stock = product.get("stock_quantity", 0)
+        availability = f"{stock} in stock" if stock > 0 else "out of stock"
+        lines.append(
+            f"- {product.get('name', 'Unnamed product')} "
+            f"(product_id: {product.get('product_id', 'unknown')}): {product.get('description', '')}; "
+            f"price: {price_text}; availability: {availability}; "
+            f"category: {product.get('category', 'unspecified')}; "
+            f"warranty: {product.get('warranty_summary', 'Not specified')}."
+        )
+    return "\n".join(lines)
 
 
 async def persist_messages(db, session_id: str, user_id: str, user_message: str, assistant_message: str) -> None:

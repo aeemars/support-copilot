@@ -167,6 +167,43 @@ async def test_citations_are_limited_to_retrieved_articles(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_product_questions_use_verified_catalogue_context(monkeypatch):
+    db = FakeDB(customer=True)
+    db.products = object()
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+    monkeypatch.setattr(
+        "app.services.chat_service.list_products",
+        AsyncMock(return_value=[{
+            "product_id": "prod-earbuds",
+            "name": "Wireless Earbuds",
+            "description": "Bluetooth earbuds.",
+            "category": "Audio",
+            "price_minor": 4500000,
+            "stock_quantity": 18,
+            "warranty_summary": "One-year warranty.",
+        }]),
+    )
+    bridge = SimpleNamespace(
+        catalogue_checked=True,
+        tools_supported=False,
+        create=AsyncMock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Wireless Earbuds are available for NGN 45,000.00.", tool_calls=None))],
+            usage=None,
+        )),
+    )
+    retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([
+        chat_service.Citation(slug="payment-methods", title="Payment Methods", excerpt="Cards and transfers."),
+    ], "<article>Payment methods</article>")))
+    response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="I need a list of available products")
+    )
+    sent_message = bridge.create.call_args.kwargs["messages"][1]["content"]
+    assert "Wireless Earbuds" in sent_message
+    assert "NGN 45,000.00" in sent_message
+    assert response.citations == []
+
+
+@pytest.mark.asyncio
 async def test_ticket_creation_works(monkeypatch):
     db = FakeDB(customer=True)
     monkeypatch.setattr("app.routers.tickets.get_db", lambda: db)
