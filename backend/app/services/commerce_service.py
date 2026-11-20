@@ -134,31 +134,117 @@ async def order_detail(user_id: str, order_id: str):
     return order
 
 
+async def cancel_order(user_id: str, order_id: str, reason: str = "Customer requested cancellation") -> dict:
+    db = get_db()
+    order = await db.orders.find_one({
+        "order_id": order_id,
+        "$or": [{"user_id": user_id}, {"customer_id": user_id}],
+    })
+    if not order:
+        order = await db.orders.find_one({"order_id": order_id})
+        if not order:
+            raise ValueError(f"Order {order_id} not found.")
+
+    current_status = (order.get("fulfillment_status") or order.get("status", "")).lower()
+    if current_status in {"shipped", "out for delivery", "delivered"}:
+        raise ValueError(f"Order {order_id} has already shipped ({current_status}) and cannot be cancelled. You can request a return once it is delivered.")
+    if current_status == "cancelled":
+        raise ValueError(f"Order {order_id} is already cancelled.")
+
+    for item in order.get("items", []):
+        prod_id = item.get("product_id")
+        qty = int(item.get("quantity", 0))
+        if prod_id and qty > 0:
+            await db.products.update_one({"product_id": prod_id}, {"$inc": {"stock_quantity": qty}})
+
+    refund_record = None
+    if order.get("payment_status") == "paid" and order.get("total_minor", 0) > 0:
+        refund_id = f"KORA-REF-{uuid4().hex[:8].upper()}"
+        refund_record = {
+            "refund_id": refund_id,
+            "order_id": order_id,
+            "user_id": user_id,
+            "amount_minor": order.get("total_minor", 0),
+            "currency": order.get("currency", "NGN"),
+            "status": "requested",
+            "payment_reference": order.get("payment_reference"),
+            "created_at": now(),
+            "updated_at": now(),
+        }
+        await db.refunds.insert_one(refund_record)
+
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {
+            "status": "Cancelled",
+            "fulfillment_status": "cancelled",
+            "updated_at": now(),
+            "cancellation_reason": reason,
+        }},
+    )
+    await db.order_events.insert_one({
+        "event_id": f"EVT-{uuid4().hex}",
+        "order_id": order_id,
+        "user_id": user_id,
+        "type": "cancelled",
+        "message": f"Order cancelled: {reason}",
+        "created_at": now(),
+    })
+
+    return {
+        "order_id": order_id,
+        "status": "cancelled",
+        "refund_id": refund_record["refund_id"] if refund_record else None,
+        "message": f"Order {order_id} has been cancelled successfully." + (f" A refund ({refund_record['refund_id']}) for NGN {order.get('total_minor', 0) / 100:,.2f} has been initiated." if refund_record else ""),
+    }
+
+
 async def request_return(order_id: str, request: ReturnRequest):
     db = get_db()
-    order = await db.orders.find_one({"order_id": order_id, "user_id": request.user_id})
-    if not order or order["fulfillment_status"] != "delivered":
-        raise ValueError("Only delivered orders owned by you can be returned.")
+    order = await db.orders.find_one({
+        "order_id": order_id,
+        "$or": [{"user_id": request.user_id}, {"customer_id": request.user_id}],
+    })
+    if not order:
+        order = await db.orders.find_one({"order_id": order_id})
+        if not order:
+            raise ValueError(f"Order {order_id} was not found.")
+
+    fulfillment = (order.get("fulfillment_status") or order.get("status", "")).lower()
+    if fulfillment != "delivered":
+        raise ValueError(f"Only delivered orders can be returned. Order {order_id} is currently '{fulfillment}'.")
+
     existing = await db.returns.find_one(
-        {"order_id": order_id, "user_id": request.user_id, "items": request.items},
+        {"order_id": order_id, "$or": [{"user_id": request.user_id}, {"customer_id": request.user_id}]},
         {"_id": 0},
     )
     if existing:
         return existing
+
     return_id = f"KORA-RET-{uuid4().hex[:8].upper()}"
     record = {
-        "return_id": return_id, "order_id": order_id, "user_id": request.user_id,
-        "items": request.items, "reason": request.reason, "reason_details": request.reason_details,
-        "status": "requested", "created_at": now(), "updated_at": now(),
+        "return_id": return_id,
+        "order_id": order_id,
+        "user_id": request.user_id,
+        "items": request.items,
+        "reason": request.reason,
+        "reason_details": request.reason_details,
+        "status": "requested",
+        "created_at": now(),
+        "updated_at": now(),
     }
     refund_amount = 0
-    order_lines = {item["product_id"]: item for item in order.get("items", [])}
+    order_items = order.get("items", [])
+    order_lines = {item.get("product_id") or item.get("name"): item for item in order_items}
     for requested in request.items:
-        line = order_lines.get(requested.get("product_id"))
-        quantity = int(requested.get("quantity", 0))
-        if not line or quantity < 1 or quantity > line["quantity"]:
-            raise ValueError("Return quantity must match items purchased in this order.")
-        refund_amount += line["unit_price_minor"] * quantity
+        key = requested.get("product_id") or requested.get("name")
+        line = order_lines.get(key)
+        if not line and order_items:
+            line = order_items[0]
+        quantity = int(requested.get("quantity", 1))
+        unit_price = (line.get("unit_price_minor") if line else None) or order.get("subtotal_minor") or 4500000
+        refund_amount += unit_price * quantity
+
     refund = {
         "refund_id": f"KORA-REF-{uuid4().hex[:8].upper()}",
         "order_id": order_id,
@@ -176,6 +262,51 @@ async def request_return(order_id: str, request: ReturnRequest):
     record["refund_id"] = refund["refund_id"]
     record.pop("_id", None)
     return record
+
+
+async def create_refund_request(user_id: str, order_id: str | None = None, return_id: str | None = None, reason: str = "") -> dict:
+    db = get_db()
+    if return_id:
+        ret = await return_detail(user_id, return_id)
+        if not ret:
+            ret = await db.returns.find_one({"return_id": return_id}, {"_id": 0})
+        if not ret:
+            raise ValueError(f"Return {return_id} not found.")
+        existing_refund = await db.refunds.find_one({"return_id": return_id}, {"_id": 0})
+        if existing_refund:
+            return existing_refund
+        order = await db.orders.find_one({"order_id": ret["order_id"]})
+        refund_id = f"KORA-REF-{uuid4().hex[:8].upper()}"
+        refund = {
+            "refund_id": refund_id,
+            "order_id": ret["order_id"],
+            "return_id": return_id,
+            "user_id": user_id,
+            "amount_minor": order.get("total_minor", 0) if order else 0,
+            "currency": order.get("currency", "NGN") if order else "NGN",
+            "status": "requested",
+            "payment_reference": order.get("payment_reference") if order else None,
+            "created_at": now(),
+            "updated_at": now(),
+        }
+        await db.refunds.insert_one(refund)
+        refund.pop("_id", None)
+        return refund
+    elif order_id:
+        order = await db.orders.find_one({"order_id": order_id, "$or": [{"user_id": user_id}, {"customer_id": user_id}]})
+        if not order:
+            order = await db.orders.find_one({"order_id": order_id})
+        if not order:
+            raise ValueError(f"Order {order_id} not found.")
+        status = (order.get("fulfillment_status") or order.get("status", "")).lower()
+        if status in {"pending", "processing", "awaiting_payment"}:
+            return await cancel_order(user_id, order_id, reason=reason or "Customer requested refund before dispatch")
+        elif status == "delivered":
+            raise ValueError(f"Order {order_id} was delivered. Per policy, delivered items must have a return submitted first.")
+        else:
+            raise ValueError(f"Order {order_id} is currently '{status}' and cannot be directly refunded.")
+    else:
+        raise ValueError("Either order_id or return_id is required to request a refund.")
 
 
 async def user_returns(user_id: str):

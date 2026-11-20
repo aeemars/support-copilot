@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.models import CartItemRequest, CheckoutRequest, ReturnRequest
 from app.services.commerce_service import (
-    add_to_cart, checkout, get_cart, list_products, order_detail, product_detail, remove_from_cart, request_return, user_orders,
+    add_to_cart, cancel_order, checkout, create_refund_request, get_cart, list_products, order_detail, product_detail, remove_from_cart, request_return, user_orders,
     refund_detail, return_detail, user_refunds, user_returns,
 )
 
@@ -59,6 +59,14 @@ async def order(user_id: str, order_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Order not found.")
     return result
+
+
+@router.post("/orders/{user_id}/{order_id}/cancel")
+async def cancel_user_order(user_id: str, order_id: str):
+    try:
+        return await cancel_order(user_id, order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/orders/{user_id}/{order_id}/returns")

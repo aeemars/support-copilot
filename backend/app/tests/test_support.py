@@ -358,3 +358,129 @@ async def test_tool_loop_limit(monkeypatch):
     )
     assert bridge.create.await_count == 5
     assert "could not complete" in response.answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_prose_order_confirmation(monkeypatch):
+    monkeypatch.setattr("app.services.chat_service.list_products", AsyncMock(return_value=[{
+        "product_id": "prod-earbuds",
+        "name": "Wireless Earbuds",
+    }]))
+    add = AsyncMock()
+    checkout = AsyncMock(return_value={
+        "order_id": "KORA-AYO123",
+        "total_minor": 4750000,
+        "payment_status": "pending",
+    })
+    monkeypatch.setattr("app.services.chat_service.add_to_cart", add)
+    monkeypatch.setattr("app.services.chat_service.checkout", checkout)
+
+    history = [{
+        "role": "assistant",
+        "content": (
+            "You are ordering 1 Wireless Earbuds at NGN 45,000.00.\n"
+            "The total for your order will be NGN 45,000.00.\n"
+            'Please type "confirm order" to finalize your purchase.\n'
+            "• Name: Ayomide\n"
+            "• Email: kumba@gmail.com\n"
+            "• Phone: 08198760925\n"
+            "• Delivery Address: 2 maplewood estate, lagos\n"
+            "• Payment Method: Bank transfer"
+        ),
+    }]
+    answer = await confirmed_order_answer("user-ayo", "session-1", "confirm order", history)
+    assert answer is not None
+    assert "KORA-AYO123" in answer
+    assert "Bank transfer" in answer or "bank transfer" in answer
+    assert "0123456789" in answer
+    add.assert_awaited_once()
+    checkout.assert_awaited_once()
+    chk_args = checkout.call_args.args[0]
+    assert chk_args.customer_name == "Ayomide"
+    assert chk_args.email == "kumba@gmail.com"
+    assert chk_args.phone == "08198760925"
+    assert "maplewood" in chk_args.line1.lower()
+    assert chk_args.payment_method == "bank_transfer"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_action_cancels_order(monkeypatch):
+    from app.services.chat_service import cancellation_action_answer
+    cancel_mock = AsyncMock(return_value={
+        "order_id": "KORA-1003",
+        "status": "cancelled",
+        "message": "Order KORA-1003 has been cancelled successfully.",
+    })
+    monkeypatch.setattr("app.services.chat_service.cancel_order", cancel_mock)
+
+    answer = await cancellation_action_answer(
+        "user-ada",
+        "session-1",
+        "Please cancel order KORA-1003",
+        [],
+    )
+    assert answer is not None
+    assert "KORA-1003" in answer
+    assert "cancelled successfully" in answer
+    cancel_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_return_action_submits_return(monkeypatch):
+    from app.services.chat_service import return_action_answer
+    ret_mock = AsyncMock(return_value={
+        "return_id": "KORA-RET-12345678",
+        "refund_id": "KORA-REF-87654321",
+    })
+    monkeypatch.setattr("app.services.chat_service.request_return", ret_mock)
+
+    db = FakeDB()
+    db.orders.find_one = AsyncMock(return_value={
+        "order_id": "KORA-1002",
+        "fulfillment_status": "delivered",
+        "items": [{"product_id": "prod-charger", "quantity": 1, "unit_price_minor": 1800000}],
+    })
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+
+    answer = await return_action_answer(
+        "user-ada",
+        "session-1",
+        "I want to return order KORA-1002 because it is damaged",
+        [],
+    )
+    assert answer is not None
+    assert "KORA-RET-12345678" in answer
+    assert "KORA-REF-87654321" in answer
+    ret_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tool_calling_supports_mutations(monkeypatch):
+    db = FakeDB(customer=True)
+    monkeypatch.setattr("app.services.chat_service.get_db", lambda: db)
+    tool_call = SimpleNamespace(
+        id="call-cancel",
+        function=SimpleNamespace(name="cancel_order", arguments='{"order_id":"KORA-1003","reason":"Changed mind"}'),
+    )
+    bridge = SimpleNamespace(
+        catalogue_checked=True,
+        tools_supported=True,
+        create=AsyncMock(side_effect=[
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=[tool_call]))], usage=None),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Your order KORA-1003 has been cancelled.", tool_calls=None))], usage=None),
+        ]),
+    )
+    retrieval = SimpleNamespace(articles_for_context=AsyncMock(return_value=([], "")))
+    cancel_mock = AsyncMock(return_value={
+        "order_id": "KORA-1003",
+        "status": "cancelled",
+        "message": "Order KORA-1003 cancelled.",
+    })
+    monkeypatch.setattr("app.services.chat_service.cancel_order", cancel_mock)
+
+    response = await ChatService(bridge=bridge, retrieval=retrieval).chat(
+        ChatRequest(user_id="user-ada", customer_id="cust-ada", message="Please cancel KORA-1003")
+    )
+    assert response.tool_used == "cancel_order"
+    assert "cancelled" in response.answer.lower()
+

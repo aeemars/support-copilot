@@ -22,7 +22,15 @@ class ChatResponse(BaseModel):
     user_id: str
     answer: str
     citations: list[Citation] = []
-    tool_used: Literal["get_order_status", "get_return_status", "get_refund_status"] | None = None
+    tool_used: Literal[
+        "get_order_status",
+        "get_return_status",
+        "get_refund_status",
+        "place_order",
+        "cancel_order",
+        "request_return",
+        "request_refund",
+    ] | None = None
     usage: dict = {}
 
 
