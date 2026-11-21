@@ -20,7 +20,7 @@ flowchart LR
 ```
 
 ## Demo Video
-- ***Demo*: /home/aeemars/Downloads/support copilot/Wekoya-Demo.mp4
+- **Demo**: https://github.com/aeemars/support-copilot/blob/pilo/Wekoya-Demo.mp4
 
 ## Quickstart
 
